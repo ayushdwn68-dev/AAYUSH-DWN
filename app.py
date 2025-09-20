@@ -1,315 +1,224 @@
-const fs = require('fs');
-const path = require('path');
-const express = require('express');
-const wiegine = require('ws3-fca');
-const WebSocket = require('ws');
+from flask import Flask, render_template_string, request, jsonify
+import requests
+import re
+from bs4 import BeautifulSoup
 
-// Initialize Express app
-const app = express();
-const PORT = 3000;
+app = Flask(__name__)
 
-// Bot configuration
-let botConfig = {
-  prefix: '!',
-  adminID: ''
-};
-
-// Bot state
-let botState = {
-  running: false,
-  api: null
-};
-
-// Locked groups and nicknames
-const lockedGroups = {};
-const lockedNicknames = {};
-
-// WebSocket server
-let wss;
-
-// HTML Control Panel (simplified)
-const htmlControlPanel = `
-<!DOCTYPE html>
+HTML = """
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Messenger Bot</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        .status {
-            padding: 10px;
-            margin-bottom: 20px;
-            border-radius: 5px;
-            background: #f0f0f0;
-        }
-        .online { background: #d4edda; }
-        .offline { background: #f8d7da; }
-        button {
-            padding: 8px 15px;
-            margin: 5px;
-            cursor: pointer;
-        }
-        input {
-            padding: 8px;
-            margin: 5px 0;
-            width: 100%;
-        }
-        .log {
-            height: 200px;
-            overflow-y: auto;
-            border: 1px solid #ddd;
-            padding: 10px;
-            margin-top: 20px;
-            font-family: monospace;
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>POST & PROFILE UID</title>
+<style>
+  /* Simple styling inspired by your screenshot */
+  body {
+    background: linear-gradient(180deg,#0f1116 0%, #1b1418 100%);
+    font-family: "Segoe UI", Roboto, Arial, sans-serif;
+    color: #b6f5b6;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    min-height:100vh;
+    margin:0;
+  }
+  .card{
+    width:360px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+    border-radius:18px;
+    padding:22px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  h1 { color:#ff9a00; text-align:center; margin:0 0 14px; font-size:22px; letter-spacing:2px;}
+  label { color:#4fe0ff; font-size:13px; display:block; margin-bottom:8px;}
+  input[type="text"]{
+    width:100%;
+    padding:14px;
+    border-radius:12px;
+    border:1px solid rgba(255,255,255,0.06);
+    background: rgba(0,0,0,0.25);
+    color:#ddd;
+    outline:none;
+    box-sizing:border-box;
+    font-size:14px;
+  }
+  .btn {
+    display:block;
+    margin-top:14px;
+    width:100%;
+    padding:14px;
+    background: linear-gradient(90deg,#ff8a00,#ff5f3b);
+    color:#fff;
+    font-weight:600;
+    border:none;
+    border-radius:12px;
+    cursor:pointer;
+    font-size:16px;
+  }
+  .result {
+    margin-top:18px;
+    padding:14px;
+    border-radius:10px;
+    background: rgba(0,0,0,0.35);
+    border:1px solid rgba(79,224,255,0.08);
+    color:#47ff7a;
+    word-wrap:break-word;
+    text-align:center;
+  }
+  .error { color:#ff6b6b; }
+  .copy-btn{
+    margin-top:10px;
+    display:inline-block;
+    padding:8px 12px;
+    border-radius:8px;
+    background: #00d4ff;
+    color:#023047;
+    font-weight:700;
+    cursor:pointer;
+    border:none;
+  }
+  .small { font-size:12px; color:#9aa4b2; margin-top:12px; text-align:center;}
+</style>
 </head>
 <body>
-    <h1>Simple Messenger Bot</h1>
-    
-    <div class="status offline" id="status">
-        Status: Offline
-    </div>
-    
-    <div>
-        <input type="file" id="cookie-file" accept=".txt,.json">
-        <small>Select your cookie file (txt or json)</small>
-    </div>
-    
-    <div>
-        <input type="text" id="prefix" value="${botConfig.prefix}" placeholder="Command prefix">
-    </div>
-    
-    <div>
-        <input type="text" id="admin-id" placeholder="Admin Facebook ID" value="${botConfig.adminID}">
-    </div>
-    
-    <button id="start-btn">Start Bot</button>
-    <button id="stop-btn" disabled>Stop Bot</button>
-    
-    <div class="log" id="log-container"></div>
+  <div class="card">
+    <h1>POST & PROFILE UID</h1>
+    <label for="fburl">PASTE FB POST OR PROFILE LINK</label>
+    <input id="fburl" type="text" placeholder="e.g: https://www.facebook.com/username_or_post_link">
+    <button id="getuid" class="btn">🔍 GET UID</button>
 
-    <script>
-        const socket = new WebSocket('ws://' + window.location.host);
-        const logContainer = document.getElementById('log-container');
-        const statusDiv = document.getElementById('status');
-        const startBtn = document.getElementById('start-btn');
-        const stopBtn = document.getElementById('stop-btn');
+    <div id="output" class="result" style="display:none;"></div>
+    <div class="small">© 2025 CODED BY TABBU ARAIN.</div>
+  </div>
 
-        function addLog(message) {
-            const logEntry = document.createElement('div');
-            logEntry.textContent = \`[\${new Date().toLocaleTimeString()}] \${message}\`;
-            logContainer.appendChild(logEntry);
-            logContainer.scrollTop = logContainer.scrollHeight;
-        }
-
-        socket.onopen = () => addLog('Connected to bot server');
-        
-        socket.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.type === 'log') {
-                addLog(data.message);
-            } else if (data.type === 'status') {
-                statusDiv.className = data.running ? 'status online' : 'status offline';
-                statusDiv.textContent = \`Status: \${data.running ? 'Online' : 'Offline'}\`;
-                startBtn.disabled = data.running;
-                stopBtn.disabled = !data.running;
-            }
-        };
-        
-        socket.onclose = () => addLog('Disconnected from bot server');
-
-        startBtn.addEventListener('click', () => {
-            const fileInput = document.getElementById('cookie-file');
-            if (fileInput.files.length === 0) {
-                addLog('Please select a cookie file');
-                return;
-            }
-            
-            const file = fileInput.files[0];
-            const reader = new FileReader();
-            
-            reader.onload = (event) => {
-                const cookieContent = event.target.result;
-                const prefix = document.getElementById('prefix').value.trim();
-                const adminId = document.getElementById('admin-id').value.trim();
-                
-                socket.send(JSON.stringify({
-                    type: 'start',
-                    cookieContent,
-                    prefix,
-                    adminId
-                }));
-            };
-            
-            reader.readAsText(file);
-        });
-        
-        stopBtn.addEventListener('click', () => {
-            socket.send(JSON.stringify({ type: 'stop' }));
-        });
-        
-        addLog('Control panel ready');
-    </script>
+<script>
+document.getElementById('getuid').addEventListener('click', async () => {
+  const url = document.getElementById('fburl').value.trim();
+  const output = document.getElementById('output');
+  output.style.display = 'block';
+  output.innerHTML = 'Processing...';
+  try {
+    const res = await fetch('/extract_uid', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ url })
+    });
+    const data = await res.json();
+    if(data.success){
+      output.innerHTML = '<div style="font-size:18px; font-weight:700;">' + data.uid + '</div>' +
+        '<button class="copy-btn" onclick="navigator.clipboard.writeText(\\'' + data.uid + '\\')">COPY UID</button>';
+    } else {
+      output.innerHTML = '<span class="error">' + (data.error || 'UID not found') + '</span>';
+    }
+  } catch(err){
+    output.innerHTML = '<span class="error">Server error. Try again.</span>';
+  }
+});
+</script>
 </body>
 </html>
-`;
+"""
 
-// Start bot function
-function startBot(cookieContent, prefix, adminID) {
-  botState.running = true;
-  botConfig.prefix = prefix;
-  botConfig.adminID = adminID;
-  
-  try {
-    fs.writeFileSync('selected_cookie.txt', cookieContent);
-    broadcast({ type: 'log', message: 'Cookie file saved' });
-  } catch (err) {
-    broadcast({ type: 'log', message: `Failed to save cookie: ${err.message}` });
-    botState.running = false;
-    return;
-  }
+# Patterns to look for in HTML/text to extract numeric id:
+UID_PATTERNS = [
+    re.compile(r'profile\.php\?id=(\d{5,})'),
+    re.compile(r'ft_ent_identifier[":\']+?(\d{5,})'),
+    re.compile(r'entity_id[":\']+?(\d{5,})'),
+    re.compile(r'owner[":\']\s*{[^}]*id[":\']\s*"?(\d{5,})'),
+    re.compile(r'"pageID":\s*"?(\\?(\d{5,}))'),
+    # Generic long digit sequences (15+ digits common in FB ids)
+    re.compile(r'(\d{9,25})'),
+]
 
-  wiegine.login(cookieContent, {}, (err, api) => {
-    if (err || !api) {
-      broadcast({ type: 'log', message: `Login failed: ${err?.message || err}` });
-      botState.running = false;
-      return;
-    }
-
-    botState.api = api;
-    broadcast({ type: 'log', message: 'Bot logged in and running' });
-    broadcast({ type: 'status', running: true });
-    
-    api.setOptions({ listenEvents: true });
-
-    // Event listener
-    api.listenMqtt((err, event) => {
-      if (err) {
-        broadcast({ type: 'log', message: `Listen error: ${err}` });
-        return;
-      }
-
-      // Message handling
-      if (event.type === 'message' && event.body?.startsWith(botConfig.prefix)) {
-        const senderID = event.senderID;
-        const args = event.body.slice(botConfig.prefix.length).trim().split(' ');
-        const command = args[0].toLowerCase();
-        const groupName = args.slice(2).join(' ');
-        const isAdmin = senderID === botConfig.adminID;
-
-        if (command === 'groupnamelock' && args[1] === 'on' && isAdmin) {
-          lockedGroups[event.threadID] = groupName;
-          api.setTitle(groupName, event.threadID, (err) => {
-            if (err) return api.sendMessage('Failed to lock group name.', event.threadID);
-            api.sendMessage(`Group name locked: ${groupName}`, event.threadID);
-          });
-        } 
-        else if (command === 'nicknamelock' && args[1] === 'on' && isAdmin) {
-          const nickname = groupName;
-          api.getThreadInfo(event.threadID, (err, info) => {
-            if (err) return console.error('Thread info error:', err);
-            info.participantIDs.forEach((userID, i) => {
-              setTimeout(() => {
-                api.changeNickname(nickname, event.threadID, userID, () => {});
-              }, i * 2000);
-            });
-            lockedNicknames[event.threadID] = nickname;
-            api.sendMessage(`Nicknames locked: ${nickname}`, event.threadID);
-          });
-        }
-      }
-
-      // Thread name changes
-      if (event.logMessageType === 'log:thread-name') {
-        const locked = lockedGroups[event.threadID];
-        if (locked) {
-          api.setTitle(locked, event.threadID, () => {
-            api.sendMessage('Group name is locked', event.threadID);
-          });
-        }
-      }
-
-      // Nickname changes
-      if (event.logMessageType === 'log:thread-nickname') {
-        const locked = lockedNicknames[event.threadID];
-        if (locked) {
-          const userID = event.logMessageData.participant_id;
-          api.changeNickname(locked, event.threadID, userID, () => {
-            api.sendMessage('Nickname is locked', event.threadID);
-          });
-        }
-      }
-    });
-  });
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)"
 }
 
-// Stop bot function
-function stopBot() {
-  if (botState.api) {
-    botState.api.logout();
-    botState.api = null;
-  }
-  botState.running = false;
-  broadcast({ type: 'status', running: false });
-  broadcast({ type: 'log', message: 'Bot stopped' });
-}
+def extract_uid_from_text(text):
+    # Try specific patterns first
+    for pat in UID_PATTERNS:
+        for m in pat.finditer(text):
+            # pick reasonable ids (avoid timestamps like 2024...)
+            uid = m.group(1)
+            if uid and len(re.sub(r'^0+','',uid)) >= 5:
+                # prefer numeric sequences that are not obviously dates
+                return uid
+    return None
 
-// WebSocket broadcast function
-function broadcast(message) {
-  if (!wss) return;
-  
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(message));
-    }
-  });
-}
+def fetch_page_text(url):
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=12, allow_redirects=True)
+        if resp.status_code == 200:
+            return resp.text
+        else:
+            return None
+    except requests.RequestException:
+        return None
 
-// Set up Express server
-app.get('/', (req, res) => {
-  res.send(htmlControlPanel);
-});
+@app.route('/', methods=['GET'])
+def index():
+    return render_template_string(HTML)
 
-// Start server
-const server = app.listen(PORT, () => {
-  console.log(`Control panel running at http://localhost:${PORT}`);
-});
+@app.route('/extract_uid', methods=['POST'])
+def extract_uid():
+    data = request.get_json() or {}
+    url = (data.get('url') or '').strip()
+    if not url:
+        return jsonify(success=False, error="Koi URL nahi diya gaya.")
+    # Pre-check: if URL already contains profile.php?id=
+    m = re.search(r'profile\.php\?id=(\d{5,})', url)
+    if m:
+        return jsonify(success=True, uid=m.group(1))
 
-// Set up WebSocket server
-wss = new WebSocket.Server({ server });
+    # Try to extract trailing numeric id in path (some share links contain long digits)
+    m2 = re.search(r'/(\d{9,25})(?:[/?]|$)', url)
+    if m2:
+        return jsonify(success=True, uid=m2.group(1))
 
-wss.on('connection', (ws) => {
-  ws.send(JSON.stringify({ 
-    type: 'status', 
-    running: botState.running 
-  }));
+    # Fetch page and parse
+    page = fetch_page_text(url)
+    if not page:
+        return jsonify(success=False, error="Facebook page fetch nahi hua (shayed private ya blocked).")
 
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message);
-      
-      if (data.type === 'start') {
-        botConfig.prefix = data.prefix;
-        botConfig.adminID = data.adminId;
-        
-        try {
-          if (!data.cookieContent) throw new Error('No cookie content provided');
-          startBot(data.cookieContent, botConfig.prefix, botConfig.adminID);
-        } catch (err) {
-          broadcast({ type: 'log', message: `Error with cookie: ${err.message}` });
-        }
-      } else if (data.type === 'stop') {
-        stopBot();
-      }
-    } catch (err) {
-      console.error('Error processing WebSocket message:', err);
-    }
-  });
-});
+    # Quick search in raw HTML
+    uid = extract_uid_from_text(page)
+    if uid:
+        return jsonify(success=True, uid=uid)
+
+    # Try to parse Open Graph meta tags and scripts using BeautifulSoup
+    try:
+        soup = BeautifulSoup(page, "html.parser")
+        # OG tags sometimes contain canonical URL with numeric id
+        for tag in soup.find_all('meta'):
+            if tag.get('property') in ('al:android:url','al:ios:url','og:url','og:image'):
+                content = tag.get('content','')
+                m = re.search(r'profile\.php\?id=(\d{5,})', content)
+                if m:
+                    return jsonify(success=True, uid=m.group(1))
+                m2 = re.search(r'/(\d{9,25})(?:[/?]|$)', content)
+                if m2:
+                    return jsonify(success=True, uid=m2.group(1))
+        # search scripts for ft_ent_identifier
+        scripts = soup.find_all('script')
+        for s in scripts:
+            text = s.string or s.get_text() or ""
+            uid = extract_uid_from_text(text)
+            if uid:
+                return jsonify(success=True, uid=uid)
+    except Exception:
+        pass
+
+    # Final fallback: look for long digits anywhere (but filter out short years)
+    mfinal = re.search(r'(\d{9,25})', page)
+    if mfinal:
+        candidate = mfinal.group(1)
+        return jsonify(success=True, uid=candidate)
+
+    return jsonify(success=False, error="UID nahi mila. Ho sakta hai page private ho ya Facebook ne content block kiya ho.")
+
+if __name__ == '__main__':
+    # Run on 0.0.0.0:5000 for Replit/Termux compatibility
+    app.run(host='0.0.0.0', port=5000, debug=True)
